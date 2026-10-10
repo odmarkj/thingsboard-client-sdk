@@ -244,6 +244,16 @@ class OTA_Handler {
 
         (void)m_send_fw_state_callback.Call_Callback(FW_STATE_UPDATING, "");
         m_fw_callback->Call_Callback(true);
+        // IAQ fix (2026-10-10): null our own pointer before the finish callback runs.
+        // m_finish_callback is bound to OTA_Firmware_Update::Firmware_OTA_Unsubscribe(), which
+        // resets the OUTER m_fw_callback (the OTA_Update_Callback this pointer aliases) back to
+        // its all-zero default -- including Get_Chunk_Size() becoming 0 -- without ever touching
+        // this pointer itself. A late/duplicate chunk-response message arriving after that point
+        // would still dereference this now-dangling-but-live pointer in
+        // Received_Valid_Chunk_Size() (m_fw_size % m_fw_callback->Get_Chunk_Size()), dividing by
+        // the zeroed chunk size and crashing (IntegerDivideByZero on ESP32). Null it here so any
+        // such late message instead hits the explicit nullptr check a few lines up.
+        m_fw_callback = nullptr;
         (void)m_finish_callback.Call_Callback();
     }
 
@@ -255,6 +265,9 @@ class OTA_Handler {
         if (m_retries <= 0) {
             (void)m_send_fw_state_callback.Call_Callback(FW_STATE_FAILED, error_message);
             m_fw_callback->Call_Callback(false);
+            // IAQ fix (2026-10-10): see the matching comment in Finish_Firmware_Update() -- same
+            // dangling-pointer-into-zeroed-callback hazard once m_finish_callback runs.
+            m_fw_callback = nullptr;
             (void)m_finish_callback.Call_Callback();
             return;
         }
@@ -273,6 +286,8 @@ class OTA_Handler {
             case OTA_Failure_Response::RETRY_NOTHING:
                 (void)m_send_fw_state_callback.Call_Callback(FW_STATE_FAILED, error_message);
                 m_fw_callback->Call_Callback(false);
+                // IAQ fix (2026-10-10): see the matching comment in Finish_Firmware_Update().
+                m_fw_callback = nullptr;
                 (void)m_finish_callback.Call_Callback();
                 break;
             default:
