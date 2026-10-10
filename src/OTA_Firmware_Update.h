@@ -263,7 +263,19 @@ class OTA_Firmware_Update : public IAPI_Implementation {
             char message[JSON_STRING_SIZE(strlen(SUBSCRIBE_TOPIC_FAILED)) + JSON_STRING_SIZE(strlen(FIRMWARE_RESPONSE_SUBSCRIBE_TOPIC))] = {};
             (void)snprintf(message, sizeof(message), SUBSCRIBE_TOPIC_FAILED, FIRMWARE_RESPONSE_SUBSCRIBE_TOPIC);
             Logger::println(message);
-            Firmware_Send_State(FW_STATE_FAILED, message);
+            // IAQ fix (2026-10-09): this method also runs from Resubscribe_Topic(), which fires
+            // synchronously from the MQTT client's own connect-success callback on EVERY
+            // reconnect, forever, regardless of whether an OTA check is actually pending -- that
+            // part is by design (subscriptions don't survive a clean-session reconnect, and a new
+            // firmware package can be assigned at any time). The problem was this branch: a
+            // failed SUBSCRIBE immediately attempting a PUBLISH (Firmware_Send_State) on the same
+            // connection that just failed to subscribe. A connection unstable enough to fail a
+            // subscribe is likely to also fail that publish, which wastes a round trip right when
+            // the link can least afford it, and can feed back into further reconnect activity
+            // with no backoff -- worse the flakier the network already is (e.g. a cellular link
+            // that's borderline deregistered). Nothing is lost by skipping it: this subscribe is
+            // retried automatically on the next successful reconnect either way, and the failure
+            // is still logged above.
             return false;
         }
         return true;
